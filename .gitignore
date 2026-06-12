@@ -1,0 +1,89 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# AgentOS / NotSiri – .gitignore
+# Xcode · Swift · macOS · watchOS
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── macOS system files ─────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Xcode build artefacts ─────────────────────────────────────────────────────
+build/
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.xcresult
+
+# ── Swift Package Manager ──────────────────────────────────────────────────────
+.build/
+.swiftpm/
+Package.resolved
+
+# ── CocoaPods ─────────────────────────────────────────────────────────────────
+Pods/
+*.xcworkspace
+!AgenticOS.xcodeproj/project.xcworkspace
+
+# ── Credentials & secrets (NEVER commit these) ────────────────────────────────
+# API keys must ONLY be stored in the macOS Keychain at runtime
+*.env
+.env
+.env.*
+*.pem
+*.p12
+*.mobileprovision
+*.provisionprofile
+secrets.json
+secrets.plist
+credentials.json
+**/Config/Secrets.swift
+**/Config/APIKeys.swift
+**/Config/secrets.swift
+
+# ── Xcode cloud / CI caches ───────────────────────────────────────────────────
+.xcode-ci/
+ci_scripts/*.sh.bak
+
+# ── Code signing ──────────────────────────────────────────────────────────────
+*.cer
+*.certSigningRequest
+*.p8
+ExportOptions.plist
+
+# ── Archives & releases (produced by CI, not committed) ───────────────────────
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.xcarchive
+Release/
+Archive/
+
+# ── Test results ──────────────────────────────────────────────────────────────
+TestResults/
+*.xcresult
+
+# ── Fastlane ──────────────────────────────────────────────────────────────────
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.orig
+*~
+.idea/
+*.swp

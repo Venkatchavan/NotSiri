@@ -1,0 +1,40 @@
+name: CI – Build Check
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  SCHEME: AgenticOS
+  PROJECT: AgenticOS.xcodeproj
+  DESTINATION: platform=macOS
+
+jobs:
+  build:
+    name: Build (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project $PROJECT \
+            -scheme $SCHEME \
+            -destination "$DESTINATION" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Lint – check for accidental secrets
+        run: |
+          # Fail if any real API key patterns are found
+          if grep -rn "sk-ant-\|AIzaSy\|ghp_\|glpat-\|ghs_" --include="*.swift" --include="*.json" --include="*.plist" .; then
+            echo "❌ Potential secret detected in source files!"
+            exit 1
+          else
+            echo "✅ No secrets found in source files"
+          fi

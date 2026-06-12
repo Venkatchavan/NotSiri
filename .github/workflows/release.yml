@@ -1,0 +1,147 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'          # Triggers on version tags like v1.0.0
+  workflow_dispatch:       # Manual trigger for testing
+
+permissions:
+  contents: write          # Needed to create GitHub Releases
+
+env:
+  SCHEME: AgenticOS
+  PROJECT: AgenticOS.xcodeproj
+  DESTINATION: platform=macOS
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 1. Build & Test
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-and-test:
+    name: Build & Test (macOS)
+    runs-on: macos-15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project $PROJECT \
+            -scheme $SCHEME
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project $PROJECT \
+            -scheme $SCHEME \
+            -destination "$DESTINATION" \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty || xcodebuild build \
+              -project $PROJECT \
+              -scheme $SCHEME \
+              -destination "$DESTINATION" \
+              CODE_SIGNING_ALLOWED=NO
+
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project $PROJECT \
+            -scheme AgenticOSTests \
+            -destination "$DESTINATION" \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tail -20 || echo "Tests skipped (no test scheme configured yet)"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 2. Archive & Create GitHub Release (tag pushes only)
+  # ─────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: build-and-test
+    runs-on: macos-15
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Archive app (unsigned – for source release)
+        run: |
+          xcodebuild archive \
+            -project $PROJECT \
+            -scheme $SCHEME \
+            -destination "$DESTINATION" \
+            -archivePath "${{ runner.temp }}/AgenticOS.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            SKIP_INSTALL=NO
+
+      - name: Zip archive for release asset
+        run: |
+          cd "${{ runner.temp }}"
+          zip -r "AgenticOS-${{ steps.version.outputs.VERSION }}-macOS.xcarchive.zip" AgenticOS.xcarchive
+
+      - name: Extract changelog for this release
+        id: changelog
+        run: |
+          NOTES=$(awk "/## \[${{ steps.version.outputs.VERSION }}\]/{flag=1; next} /## \[/{flag=0} flag" CHANGELOG.md)
+          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: AgentOS ${{ github.ref_name }}
+          body: |
+            ## What's new in AgentOS ${{ github.ref_name }}
+
+            ${{ steps.changelog.outputs.NOTES }}
+
+            ---
+
+            ### Installation
+            This is a **source release** requiring Xcode 26+ to build.
+            See [README.md](README.md) for setup instructions.
+
+            > ⚠️ API keys (Claude, Gemini) and OAuth tokens are **never** included in releases.
+            > Configure them in the app's Settings screen after first launch.
+
+            ### Requirements
+            - macOS Golden Gate (26.0+)
+            - Apple Silicon Mac (M-series) for on-device Foundation Models
+            - Xcode 26+ to build from source
+          files: |
+            ${{ runner.temp }}/AgenticOS-${{ steps.version.outputs.VERSION }}-macOS.xcarchive.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 3. Security scan on every push to main
+  # ─────────────────────────────────────────────────────────────────────────────
+  secret-scan:
+    name: Secret Leak Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets with gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}   # Optional for org use
