@@ -78,22 +78,25 @@ struct DashboardView: View {
         // 1. Wire model context into voice router
         VoiceCommandRouter.shared.modelContextWrapper = ModelContextWrapper(modelContext)
 
-        // 2. Sync Calendar events → Meeting records
+        // 2. Reset cached auth flags so re-sync picks up any permission changes
+        await CoordinatorAgent.shared.calendarAgent.resetAuthForResync()
+
+        // 3. Sync Calendar events → Meeting records
         await performSync("Syncing Calendar…") {
             try await EventKitManager.shared.syncCalendarToSwiftData(context: modelContext)
         }
 
-        // 3. Sync Reminders → AgentTask records
+        // 4. Sync Reminders → AgentTask records
         await performSync("Syncing Reminders…") {
             try await EventKitManager.shared.syncRemindersToSwiftData(context: modelContext)
         }
 
-        // 4. Sync Contacts → Person records
+        // 5. Sync Contacts → Person records
         await performSync("Syncing Contacts…") {
             try await ContactsManager.shared.syncContactsToSwiftData(context: modelContext)
         }
 
-        // 5. Index files in Desktop / Documents / Downloads
+        // 6. Index files in Desktop / Documents / Downloads
         isSyncing   = true
         syncMessage = "Indexing Files…"
         await FileIndexer.shared.indexStandardDirectories(context: modelContext)
@@ -102,10 +105,10 @@ struct DashboardView: View {
         isSyncing   = false
         syncMessage = ""
 
-        // 6. Start ambient listening
+        // 7. Start ambient listening
         await VoiceCommandRouter.shared.activate()
 
-        // 7. Schedule proactive background checks
+        // 8. Schedule proactive background checks
         ProactiveIntelligenceEngine.shared.scheduleNextBackgroundCheck()
     }
 

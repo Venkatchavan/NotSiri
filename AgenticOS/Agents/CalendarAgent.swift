@@ -35,9 +35,11 @@ actor CalendarAgent: DomainAgent {
         guard isAuthorized else {
             return AgentResponse(
                 domain: .calendar,
-                content: "Calendar access has not been granted.\n\nTo fix: open **System Settings → Privacy & Security → Calendar** and enable AgentOS, then tap ↻ to re-sync.",
+                content: "Calendar access has not been granted to AgentOS.\n\nTap **Open System Settings** below → go to **Privacy & Security → Calendar** → enable AgentOS. Then tap ↻ in the toolbar to re-sync.",
                 confidence: 1.0,
-                suggestedActions: [],
+                suggestedActions: [
+                    AgentAction(label: "Open System Settings", systemImage: "gear.badge.checkmark", intent: "openSettings:calendars")
+                ],
                 provider: .onDevice
             )
         }
@@ -94,6 +96,12 @@ actor CalendarAgent: DomainAgent {
         } catch {
             isAuthorized = false
         }
+    }
+
+    /// Called by the re-sync button — clears cached auth so the next query
+    /// re-checks the current System Settings value (user may have just granted it).
+    func resetAuthForResync() {
+        isAuthorized = false
     }
 
     func todaysMeetings() async -> [EKEvent] {

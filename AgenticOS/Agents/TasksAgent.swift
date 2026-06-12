@@ -32,16 +32,12 @@ actor TasksAgent: DomainAgent {
         let (summary, hasData) = await buildTaskData(using: context.modelContext)
 
         // ── Guard: no real tasks → return factual answer, skip LLM ──────────
-        // This is the only reliable way to prevent hallucination of fake tasks.
         guard hasData else {
             return AgentResponse(
                 domain: .tasks,
                 content: summary,
                 confidence: 1.0,
-                suggestedActions: [
-                    AgentAction(label: "Add Task", systemImage: "plus.circle.fill", intent: "AddTaskIntent"),
-                    AgentAction(label: "Open Reminders", systemImage: "checklist", intent: "QueryIntent")
-                ],
+                suggestedActions: noTaskActions(),
                 provider: .onDevice
             )
         }
@@ -143,13 +139,20 @@ actor TasksAgent: DomainAgent {
             return ("Your reminders (from Reminders app):\n\(lines)", true)
         }
 
-        // 3. Truly empty — return factual no-data message
+        // 3. Truly empty — return factual no-data message with Settings shortcut
         return (
             "You have no open tasks or reminders in AgentOS right now.\n\n" +
-            "• If you have tasks in Reminders, tap ↻ in the toolbar to re-sync.\n" +
-            "• Tap **Add Task** below to create your first task.",
+            "• If you have tasks in Reminders, make sure Reminders access is granted (tap **Open Settings** below), then tap ↻ in the toolbar to re-sync.\n" +
+            "• Tap **Add Task** to create your first task directly in AgentOS.",
             false
         )
+    }
+
+    private func noTaskActions() -> [AgentAction] {
+        [
+            AgentAction(label: "Add Task",       systemImage: "plus.circle.fill",   intent: "AddTaskIntent"),
+            AgentAction(label: "Open Settings",  systemImage: "gear.badge.checkmark", intent: "openSettings:reminders"),
+        ]
     }
 
     /// Direct EventKit read – used when SwiftData hasn't synced yet

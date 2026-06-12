@@ -286,12 +286,35 @@ private struct ProviderBadge: View {
 
 private struct ActionChip: View {
     let action: AgentAction
+
     var body: some View {
-        Label(action.label, systemImage: action.systemImage)
-            .font(.caption2.bold())
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.thinMaterial, in: Capsule())
+        Button { handleTap() } label: {
+            Label(action.label, systemImage: action.systemImage)
+                .font(.caption2.bold())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(.thinMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func handleTap() {
+        // Special system intents — openSettings:<section>
+        if action.intent.hasPrefix("openSettings:") {
+            let section = action.intent.replacingOccurrences(of: "openSettings:", with: "")
+            let urlMap: [String: String] = [
+                "calendars":  "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
+                "reminders":  "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders",
+                "contacts":   "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts",
+                "microphone": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            ]
+            if let urlStr = urlMap[section], let url = URL(string: urlStr) {
+                NSWorkspace.shared.open(url)
+            } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        // All other intents are informational chips (App Intents fired elsewhere)
     }
 }
 
@@ -331,32 +354,133 @@ private struct WelcomePromptView: View {
     }
 }
 
-// MARK: - Settings View stub (referenced from DashboardView)
+// MARK: - Settings View
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var claudeKey = ""
-    @State private var geminiKey = ""
+    @State private var claudeKey = KeychainHelper.read(key: "agentos.claude.apikey") ?? ""
+    @State private var geminiKey = KeychainHelper.read(key: "agentos.gemini.apikey") ?? ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Settings").font(.title2.bold())
-            Group {
-                SecureField("Claude API Key", text: $claudeKey)
-                SecureField("Gemini API Key", text: $geminiKey)
-            }
-            .textFieldStyle(.roundedBorder)
-            HStack {
-                Spacer()
-                Button("Save") {
-                    if !claudeKey.isEmpty { LanguageModelRouter.shared.storeAPIKey(claudeKey, for: .claude) }
-                    if !geminiKey.isEmpty { LanguageModelRouter.shared.storeAPIKey(geminiKey, for: .gemini) }
-                    dismiss()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("Settings").font(.title2.bold())
+
+                // ── Permissions ───────────────────────────────────────────
+                GroupBox("Privacy Permissions") {
+                    VStack(spacing: 0) {
+                        PermissionRow(
+                            title: "Calendar",
+                            description: "Read events & sync meetings",
+                            systemImage: "calendar",
+                            settingsKey: "calendars"
+                        )
+                        Divider()
+                        PermissionRow(
+                            title: "Reminders",
+                            description: "Sync tasks from Reminders app",
+                            systemImage: "checklist",
+                            settingsKey: "reminders"
+                        )
+                        Divider()
+                        PermissionRow(
+                            title: "Contacts",
+                            description: "Link people to emails & events",
+                            systemImage: "person.crop.circle",
+                            settingsKey: "contacts"
+                        )
+                        Divider()
+                        PermissionRow(
+                            title: "Microphone",
+                            description: "Hey AgentOS wake phrase",
+                            systemImage: "mic.fill",
+                            settingsKey: "microphone"
+                        )
+                    }
                 }
-                .buttonStyle(.borderedProminent)
+
+                // ── AI Provider Keys ──────────────────────────────────────
+                GroupBox("AI Providers (optional)") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Without API keys all queries run on-device via Apple Foundation Models.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        SecureField("Claude API Key (Anthropic)", text: $claudeKey)
+                            .textFieldStyle(.roundedBorder)
+                        SecureField("Gemini API Key (Google)", text: $geminiKey)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Save Keys") {
+                            if !claudeKey.isEmpty { LanguageModelRouter.shared.storeAPIKey(claudeKey, for: .claude) }
+                            if !geminiKey.isEmpty { LanguageModelRouter.shared.storeAPIKey(geminiKey, for: .gemini) }
+                            dismiss()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                // ── Re-sync ───────────────────────────────────────────────
+                GroupBox("Data Sync") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("AgentOS syncs Calendar, Reminders, and Contacts automatically on launch. Use the ↻ button in the toolbar to force a re-sync after granting permissions.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Open System Settings → Privacy") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .font(.caption)
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Done") { dismiss() }.buttonStyle(.bordered)
+                }
             }
+            .padding(20)
         }
-        .padding(24)
-        .frame(width: 380)
+        .frame(width: 420, height: 580)
+    }
+}
+
+// MARK: - Permission Row
+
+private struct PermissionRow: View {
+    let title: String
+    let description: String
+    let systemImage: String
+    let settingsKey: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .frame(width: 28)
+                .foregroundStyle(.tint)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.medium))
+                Text(description).font(.caption2).foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("Open") {
+                let urlMap: [String: String] = [
+                    "calendars":  "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
+                    "reminders":  "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders",
+                    "contacts":   "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts",
+                    "microphone": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+                ]
+                if let urlStr = urlMap[settingsKey], let url = URL(string: urlStr) {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .font(.caption)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 4)
     }
 }
