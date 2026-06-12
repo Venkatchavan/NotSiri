@@ -8,9 +8,12 @@
 import SwiftUI
 import SwiftData
 import UserNotifications
+import AuthenticationServices
 
 @main
 struct AgenticOSApp: App {
+
+    @State private var authState = AuthState.shared
 
     // MARK: - SwiftData Hypergraph Container
     var sharedModelContainer: ModelContainer = {
@@ -45,15 +48,23 @@ struct AgenticOSApp: App {
 
     var body: some Scene {
 
-        // Main three-column dashboard
-        Window("AgentOS Dashboard", id: "dashboard") {
-            DashboardView()
-                .modelContainer(sharedModelContainer)
-                .onAppear { requestNotificationPermission() }
+        // Main window — shows Sign In or Dashboard depending on auth state
+        Window("AgentOS", id: "dashboard") {
+            Group {
+                if authState.isSignedIn {
+                    DashboardView()
+                        .modelContainer(sharedModelContainer)
+                        .onAppear { requestNotificationPermission() }
+                } else {
+                    SignInView()
+                }
+            }
+            .animation(.easeInOut(duration: 0.4), value: authState.isSignedIn)
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
-        .defaultSize(width: 1200, height: 780)
+        .defaultSize(width: authState.isSignedIn ? 1200 : 520,
+                     height: authState.isSignedIn ? 780 : 620)
         .commands {
             AgentOSCommands()
         }
