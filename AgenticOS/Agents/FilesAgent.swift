@@ -2,7 +2,9 @@
 // Domain agent for file discovery – content never leaves device
 
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 import SwiftData
 
 actor FilesAgent: DomainAgent {

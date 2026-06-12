@@ -18,9 +18,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      # ── Detect available Xcode version ───────────────────────────────────────
+      - name: Detect Xcode version
+        id: xcode
+        run: |
+          # Try Xcode 26 first (macOS Golden Gate runners), fall back to whatever is installed
+          if [ -d "/Applications/Xcode_26.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
+          elif [ -d "/Applications/Xcode.app" ]; then
+            sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          fi
+          VERSION=$(xcodebuild -version 2>/dev/null | head -1 | grep -oE '[0-9]+' | head -1)
+          echo "XCODE_MAJOR=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Xcode major version: $VERSION"
+          xcodebuild -version
 
+      # ── Build (requires Xcode 26+ for FoundationModels) ──────────────────────
       - name: Build
         run: |
           xcodebuild build \
@@ -29,12 +42,12 @@ jobs:
             -destination "$DESTINATION" \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Lint – check for accidental secrets
+      # ── Secret scan ──────────────────────────────────────────────────────────
+      - name: Lint – no hardcoded secrets
         run: |
-          # Fail if any real API key patterns are found
-          if grep -rn "sk-ant-\|AIzaSy\|ghp_\|glpat-\|ghs_" --include="*.swift" --include="*.json" --include="*.plist" .; then
-            echo "❌ Potential secret detected in source files!"
+          if grep -rn "sk-ant-\|AIzaSy\|ghp_\|glpat-\|ghs_" \
+               --include="*.swift" --include="*.json" --include="*.plist" .; then
+            echo "❌ Potential secret detected!"
             exit 1
-          else
-            echo "✅ No secrets found in source files"
           fi
+          echo "✅ No secrets found in source"

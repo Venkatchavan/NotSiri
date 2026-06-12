@@ -3,7 +3,9 @@
 
 import Foundation
 import Observation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 import SwiftData
 
 @Observable

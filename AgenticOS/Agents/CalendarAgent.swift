@@ -3,7 +3,9 @@
 
 import Foundation
 import EventKit
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 
 actor CalendarAgent: DomainAgent {
 

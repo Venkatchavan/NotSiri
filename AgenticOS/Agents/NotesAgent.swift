@@ -2,7 +2,9 @@
 // Domain agent for notes from local store, Obsidian, and Notion
 
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 import SwiftData
 
 actor NotesAgent: DomainAgent {

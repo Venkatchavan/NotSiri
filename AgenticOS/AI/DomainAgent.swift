@@ -2,8 +2,10 @@
 // Base protocol + shared types for all six domain agents
 
 import Foundation
-import FoundationModels
 import SwiftData
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
 // MARK: - Domain Enumeration
 
@@ -86,19 +88,35 @@ struct AgentAction: Identifiable, Sendable {
 
 // MARK: - Intent Classification (structured output)
 
+#if canImport(FoundationModels)
+/// On macOS 26+ the @Generable macro wires this into the LLM's JSON schema system.
 @Generable
 struct IntentClassification {
-    /// Primary domains this query addresses
-    var domains: [String]
-    /// High-level intent label, e.g. "schedule_meeting", "find_file"
-    var intent: String
-    /// Key entities extracted from the utterance
-    var entities: [String]
-    /// Routing complexity: "factual" | "synthesis" | "realtime"
+    var domains:    [String]
+    var intent:     String
+    var entities:   [String]
     var complexity: String
-    /// Model's confidence in this classification (0–1)
     var confidence: Double
 }
+#else
+/// Stub used on pre-macOS 26 SDKs (CI). Conforms to the local Generable protocol.
+struct IntentClassification: Generable {
+    var domains:    [String] = []
+    var intent:     String   = ""
+    var entities:   [String] = []
+    var complexity: String   = "factual"
+    var confidence: Double   = 0.5
+    init() {}
+    init(domains: [String], intent: String, entities: [String],
+         complexity: String, confidence: Double) {
+        self.domains    = domains
+        self.intent     = intent
+        self.entities   = entities
+        self.complexity = complexity
+        self.confidence = confidence
+    }
+}
+#endif
 
 // MARK: - Domain Agent Protocol
 

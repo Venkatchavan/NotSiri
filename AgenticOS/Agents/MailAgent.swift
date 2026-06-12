@@ -2,7 +2,9 @@
 // Domain agent for email – ALWAYS on-device, body content never leaves device
 
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 
 actor MailAgent: DomainAgent {
 

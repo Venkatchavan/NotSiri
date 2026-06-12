@@ -2,7 +2,9 @@
 // Domain agent for web research – routes to Gemini for real-time context
 
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 
 actor ResearchAgent: DomainAgent {
 
