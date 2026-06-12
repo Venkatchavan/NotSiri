@@ -100,10 +100,30 @@ actor CalendarAgent: DomainAgent {
     // MARK: - Helpers
 
     private func buildCalendarContext(for date: Date) async -> String {
-        let events = await todaysMeetings()
-        if events.isEmpty { return "No events today." }
-        return events.map { "\($0.title ?? "Untitled") at \($0.startDate.formatted(date: .omitted, time: .shortened))" }
-                     .joined(separator: "; ")
+        let todayEvents    = await todaysMeetings()
+        let upcomingEvents = await upcomingMeetings(days: 3)
+        let tomorrow       = upcomingEvents.filter { !Calendar.current.isDateInToday($0.startDate) }
+
+        var parts: [String] = []
+
+        if todayEvents.isEmpty {
+            parts.append("Today: No events scheduled.")
+        } else {
+            let todayStr = todayEvents.map {
+                "\($0.title ?? "Untitled") at \($0.startDate.formatted(date: .omitted, time: .shortened))"
+                + ($0.location.map { " @ \($0)" } ?? "")
+            }.joined(separator: "; ")
+            parts.append("Today: \(todayStr)")
+        }
+
+        if !tomorrow.isEmpty {
+            let upcomingStr = tomorrow.prefix(5).map {
+                "\($0.title ?? "Untitled") on \($0.startDate.formatted(date: .abbreviated, time: .shortened))"
+            }.joined(separator: "; ")
+            parts.append("Upcoming (next 2 days): \(upcomingStr)")
+        }
+
+        return parts.joined(separator: "\n")
     }
 
     private func suggestedActions(for query: String) -> [AgentAction] {

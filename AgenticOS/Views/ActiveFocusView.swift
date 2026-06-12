@@ -3,6 +3,9 @@
 
 import SwiftUI
 import SwiftData
+#if canImport(AppKit)
+import AppKit
+#endif
 
 struct ActiveFocusView: View {
 
@@ -13,6 +16,7 @@ struct ActiveFocusView: View {
     @Query private var allTasks: [AgentTask]
     @Query private var allMeetings: [Meeting]
     @Query private var allNotes: [AgentNote]
+    @Query private var allFiles: [AgentFile]
 
     @State private var coordinator = CoordinatorAgent.shared
     @State private var showingAddTask = false
@@ -28,6 +32,9 @@ struct ActiveFocusView: View {
     private var notes: [AgentNote] {
         allNotes.sorted { $0.updatedAt > $1.updatedAt }
     }
+    private var recentFiles: [AgentFile] {
+        allFiles.sorted { $0.lastModified > $1.lastModified }
+    }
 
     var body: some View {
         Group {
@@ -35,7 +42,7 @@ struct ActiveFocusView: View {
             case .calendar:  CalendarFocusSection(meetings: meetings)
             case .mail:      MailFocusSection()
             case .tasks:     TasksFocusSection(tasks: openTasks, showAddTask: $showingAddTask)
-            case .files:     FilesFocusSection()
+            case .files:     FilesFocusSection(files: recentFiles)
             case .notes:     NotesFocusSection(notes: notes)
             case .research:  ResearchFocusSection()
             }
@@ -167,11 +174,72 @@ private struct DeadlineBadge: View {
 // MARK: - Mail Focus
 
 private struct MailFocusSection: View {
+    @State private var toField      = ""
+    @State private var subjectField = ""
+    @State private var bodyField    = ""
+    @State private var showCompose  = false
+
     var body: some View {
-        ContentUnavailableView {
-            Label("Mail Overview", systemImage: "envelope.fill")
-        } description: {
-            Text("Ask AgentOS about your emails using the chat panel →")
+        List {
+            // Compose row
+            Section {
+                Button {
+                    showCompose = true
+                } label: {
+                    Label("Compose New Email", systemImage: "square.and.pencil")
+                        .font(.callout)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Inbox Access", systemImage: "info.circle")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    Text("macOS sandboxing prevents third-party apps from reading Mail.app's inbox directly. Use the Agent Chat to draft replies — AgentOS composes via your default mail client.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section("Quick Compose") {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("To: (email address)", text: $toField)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                    TextField("Subject", text: $subjectField)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                    TextEditor(text: $bodyField)
+                        .font(.caption)
+                        .frame(height: 80)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                    Button("Open in Mail") {
+                        openInMail(to: toField, subject: subjectField, body: bodyField)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(toField.isEmpty)
+                    .font(.caption)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .listStyle(.inset)
+    }
+
+    private func openInMail(to: String, subject: String, body: String) {
+        var components  = URLComponents()
+        components.scheme = "mailto"
+        components.path   = to
+        var items: [URLQueryItem] = []
+        if !subject.isEmpty { items.append(URLQueryItem(name: "subject", value: subject)) }
+        if !body.isEmpty    { items.append(URLQueryItem(name: "body",    value: body))    }
+        components.queryItems = items.isEmpty ? nil : items
+        if let url = components.url {
+            NSWorkspace.shared.open(url)
         }
     }
 }
@@ -179,10 +247,133 @@ private struct MailFocusSection: View {
 // MARK: - Files Focus
 
 private struct FilesFocusSection: View {
+    let files: [AgentFile]
+    @State private var searchText = ""
+
+    private var filtered: [AgentFile] {
+        guard !searchText.isEmpty else { return Array(files.prefix(50)) }
+        return files.filter {
+            $0.name.localizedCaseInsensitiveContains(searchText) ||
+            $0.fileExtension.localizedCaseInsensitiveContains(searchText) ||
+            $0.tags.contains { $0.localizedCaseInsensitiveContains(searchText) }
+        }
+        .prefix(50)
+        .map { $0 }
+    }
+
     var body: some View {
-        ContentUnavailableView {
-            Label("Files Search", systemImage: "folder.fill")
-        } description: {
+        VStack(spacing: 0) {
+            // Search bar
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
+                TextField("Search files…", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            if files.isEmpty {
+                ContentUnavailableView {
+                    Label("No Files Indexed", systemImage: "folder.badge.questionmark")
+                } description: {
+                    Text("Files from Desktop, Documents and Downloads are indexed on launch. Try re-syncing with ↻ in the toolbar.")
+                }
+                Spacer()
+            } else {
+                List(filtered) { file in
+                    FileRow(file: file)
+                        .listRowBackground(Color.clear)
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+}
+
+private struct FileRow: View {
+    let file: AgentFile
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName(for: file.fileExtension))
+                .foregroundStyle(iconColor(for: file.fileExtension))
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(file.displayName)
+                    .font(.callout)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if !file.tags.isEmpty {
+                        Text(file.tags.first ?? "")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(file.lastModified.relativeFormatted)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Spacer()
+
+            Button {
+                if !file.filePath.isEmpty {
+                    NSWorkspace.shared.selectFile(file.filePath, inFileViewerRootedAtPath: "")
+                } else if let url = file.resolveURL() {
+                    NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: "")
+                }
+            } label: {
+                Image(systemName: "arrow.right.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Reveal in Finder")
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func iconName(for ext: String) -> String {
+        switch ext {
+        case "pdf":                          return "doc.richtext"
+        case "doc", "docx", "pages", "rtf": return "doc.text"
+        case "xls", "xlsx", "csv", "numbers": return "tablecells"
+        case "ppt", "pptx", "key":          return "person.wave.2"
+        case "md", "txt":                   return "text.alignleft"
+        case "swift", "py", "js", "ts":     return "chevron.left.forwardslash.chevron.right"
+        case "json", "yaml", "yml", "xml":  return "curlybraces"
+        case "png", "jpg", "jpeg", "heic":  return "photo"
+        case "mp4", "mov":                  return "play.rectangle"
+        case "mp3", "m4a":                  return "music.note"
+        case "zip", "gz", "tar":            return "archivebox"
+        default:                            return "doc"
+        }
+    }
+
+    private func iconColor(for ext: String) -> Color {
+        switch ext {
+        case "pdf":                          return .red
+        case "doc", "docx", "pages":        return .blue
+        case "xls", "xlsx", "csv", "numbers": return .green
+        case "ppt", "pptx", "key":          return .orange
+        case "md", "txt", "rtf":            return .primary
+        case "swift":                       return .orange
+        case "py":                          return .blue
+        case "js", "ts":                    return .yellow
+        case "json", "yaml", "yml":         return .teal
+        case "png", "jpg", "jpeg", "heic":  return .purple
+        case "mp4", "mov":                  return .pink
+        default:                            return .secondary
             Text("Try: \"Hey AgentOS, find my Berlin project presentation\"")
         }
     }

@@ -15,6 +15,10 @@ struct DashboardView: View {
     @State private var showPrivacySheet  = false
     @State private var showSettingsSheet = false
 
+    // Startup sync state
+    @State private var isSyncing   = false
+    @State private var syncMessage = ""
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
 
@@ -39,11 +43,22 @@ struct DashboardView: View {
         .sheet(isPresented: $showPrivacySheet)  { PrivacyConsentView() }
         .sheet(isPresented: $showSettingsSheet) { SettingsView() }
         .overlay(alignment: .bottom) {
-            if voiceRouter.routerState == .processing || voiceRouter.routerState == .speaking {
-                VoiceActivityPill(state: voiceRouter.routerState, transcript: AmbientListeningManager.shared.liveTranscript)
-                    .padding(.bottom, 20)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            VStack(spacing: 8) {
+                // Sync status pill
+                if isSyncing {
+                    SyncStatusPill(message: syncMessage)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                // Voice activity pill
+                if voiceRouter.routerState == .processing || voiceRouter.routerState == .speaking {
+                    VoiceActivityPill(state: voiceRouter.routerState,
+                                      transcript: AmbientListeningManager.shared.liveTranscript)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .padding(.bottom, 20)
+            .animation(.easeInOut(duration: 0.3), value: isSyncing)
+            .animation(.easeInOut(duration: 0.3), value: voiceRouter.routerState)
         }
         .overlay(alignment: .topTrailing) {
             if !proactive.pendingAlerts.isEmpty {
@@ -51,14 +66,54 @@ struct DashboardView: View {
                     .padding(16)
             }
         }
-        .task {
-            // Inject model context into voice router
-            VoiceCommandRouter.shared.modelContextWrapper = ModelContextWrapper(modelContext)
-            // Start ambient listening
-            await VoiceCommandRouter.shared.activate()
-            // Schedule first proactive check
-            ProactiveIntelligenceEngine.shared.scheduleNextBackgroundCheck()
+        .task { await startupSync() }
+    }
+
+    // MARK: - Startup Sync Pipeline
+
+    /// Pulls ALL real device data into SwiftData on launch.
+    /// Runs on @MainActor (SwiftUI .task inherits view's actor).
+    @MainActor
+    private func startupSync() async {
+        // 1. Wire model context into voice router
+        VoiceCommandRouter.shared.modelContextWrapper = ModelContextWrapper(modelContext)
+
+        // 2. Sync Calendar events → Meeting records
+        await performSync("Syncing Calendar…") {
+            try await EventKitManager.shared.syncCalendarToSwiftData(context: modelContext)
         }
+
+        // 3. Sync Reminders → AgentTask records
+        await performSync("Syncing Reminders…") {
+            try await EventKitManager.shared.syncRemindersToSwiftData(context: modelContext)
+        }
+
+        // 4. Sync Contacts → Person records
+        await performSync("Syncing Contacts…") {
+            try await ContactsManager.shared.syncContactsToSwiftData(context: modelContext)
+        }
+
+        // 5. Index files in Desktop / Documents / Downloads
+        isSyncing   = true
+        syncMessage = "Indexing Files…"
+        await FileIndexer.shared.indexStandardDirectories(context: modelContext)
+
+        // Done
+        isSyncing   = false
+        syncMessage = ""
+
+        // 6. Start ambient listening
+        await VoiceCommandRouter.shared.activate()
+
+        // 7. Schedule proactive background checks
+        ProactiveIntelligenceEngine.shared.scheduleNextBackgroundCheck()
+    }
+
+    private func performSync(_ message: String, _ work: @escaping () async throws -> Void) async {
+        isSyncing   = true
+        syncMessage = message
+        do    { try await work() }
+        catch { /* permission denied or not available – silent */ }
     }
 
     // MARK: - Toolbar
@@ -70,6 +125,16 @@ struct DashboardView: View {
             RoutingIndicatorView()
 
             Spacer()
+
+            // Sync button (manual re-sync)
+            Button {
+                Task { await startupSync() }
+            } label: {
+                Image(systemName: isSyncing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
+                    .symbolEffect(.rotate, isActive: isSyncing)
+            }
+            .help("Re-sync device data")
+            .disabled(isSyncing)
 
             // Ambient listening toggle
             Button {
@@ -93,6 +158,22 @@ struct DashboardView: View {
             Button { showSettingsSheet = true } label: { Image(systemName: "gearshape") }
                 .help("Settings")
         }
+    }
+}
+
+// MARK: - Sync Status Pill
+
+private struct SyncStatusPill: View {
+    let message: String
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().scaleEffect(0.7)
+            Text(message).font(.caption).lineLimit(1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .shadow(radius: 4)
     }
 }
 

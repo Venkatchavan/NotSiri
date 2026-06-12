@@ -1,7 +1,9 @@
+
 // Agents/MailAgent.swift – AgentOS
 // Domain agent for email – ALWAYS on-device, body content never leaves device
 
 import Foundation
+import SwiftData
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -26,11 +28,14 @@ actor MailAgent: DomainAgent {
 
     func process(query: String, context: AgentContext) async throws -> AgentResponse {
         // Mail always routes on-device (privacy boundary enforced)
+        let emailContext = buildEmailContext(from: context.modelContext)
         let session = LanguageModelSession(instructions: systemInstructions)
         let enrichedPrompt = """
         Current date: \(context.currentDate.formatted())
+        \(emailContext)
         User query: \(query)
-        Note: Full email bodies are available locally only. Do not request cloud processing.
+        IMPORTANT: Only reference emails listed above. Do NOT invent email subjects, senders, or counts.
+        If no email data is shown, tell the user that inbox access requires importing emails first.
         """
         let response = try await session.respond(to: enrichedPrompt)
         return AgentResponse(
@@ -40,6 +45,31 @@ actor MailAgent: DomainAgent {
             suggestedActions: suggestedActions(for: query),
             provider: .onDevice   // enforced
         )
+    }
+
+    // MARK: - Email Context Builder
+
+    /// Reads AgentEmail records from SwiftData (populated if user imports).
+    /// Returns explicit "no data" statement when store is empty so the LLM can't hallucinate.
+    private func buildEmailContext(from modelContext: ModelContext?) -> String {
+        guard let ctx = modelContext,
+              let emails = try? ctx.fetch(FetchDescriptor<AgentEmail>()),
+              !emails.isEmpty
+        else {
+            return "Inbox data: Not available. No emails have been imported into AgentOS yet."
+        }
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 3600) // last 7 days
+        let recent = emails
+            .filter { $0.receivedAt >= cutoff }
+            .sorted { $0.receivedAt > $1.receivedAt }
+            .prefix(20)
+        let lines = recent.map { email in
+            "[\(email.receivedAt.formatted(date: .abbreviated, time: .omitted))] "
+            + "From: \(email.sender?.name ?? email.sender?.email ?? "Unknown") | "
+            + "Subject: \(email.subject)"
+            + (email.isReplied ? " ✓" : " [needs reply]")
+        }.joined(separator: "\n")
+        return "Recent emails (last 7 days):\n\(lines)"
     }
 
     // MARK: - Draft Generation (on-device only)

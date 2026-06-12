@@ -73,19 +73,4 @@ struct AgentOSShortcuts: AppShortcutsProvider {
     }
 }
 
-// MARK: - Shared Model Container Accessor (used by all intents)
-
-import SwiftData
-
-enum AgentOSModelContainer {
-    static func shared() throws -> ModelContainer {
-        try ModelContainer(
-            for: AgentTask.self, Project.self, Person.self, AgentEmail.self,
-                AgentFile.self, AgentNote.self, Deadline.self, Meeting.self,
-            configurations: ModelConfiguration(
-                isStoredInMemoryOnly: false,
-                allowsSave: true
-            )
-        )
-    }
-}
+// AgentOSModelContainer is defined in Models/AgentOSModelContainer.swift

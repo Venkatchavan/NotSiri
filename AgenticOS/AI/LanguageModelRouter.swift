@@ -102,7 +102,10 @@ final class LanguageModelRouter {
     // MARK: - Claude (Anthropic)
 
     private func routeClaude(prompt: String, instructions: String) async throws -> String {
-        guard let key = claudeAPIKey else { throw RouterError.missingAPIKey(.claude) }
+        // No key configured → silently fall back to on-device (user sees answer, not an error)
+        guard let key = claudeAPIKey, !key.isEmpty else {
+            return try await routeOnDevice(prompt: prompt, instructions: instructions)
+        }
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -117,15 +120,26 @@ final class LanguageModelRouter {
             "messages": [["role": "user", "content": prompt]]
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
-        let decoded = try JSONDecoder().decode(ClaudeResponse.self, from: data)
-        return decoded.content.first?.text ?? ""
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            // On HTTP error fall back to on-device rather than crashing
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                return try await routeOnDevice(prompt: prompt, instructions: instructions)
+            }
+            let decoded = try JSONDecoder().decode(ClaudeResponse.self, from: data)
+            return decoded.content.first?.text ?? ""
+        } catch {
+            return try await routeOnDevice(prompt: prompt, instructions: instructions)
+        }
     }
 
     // MARK: - Gemini
 
     private func routeGemini(prompt: String, instructions: String) async throws -> String {
-        guard let key = geminiAPIKey else { throw RouterError.missingAPIKey(.gemini) }
+        // No key configured → fall back to on-device
+        guard let key = geminiAPIKey, !key.isEmpty else {
+            return try await routeOnDevice(prompt: prompt, instructions: instructions)
+        }
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=\(key)")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -134,9 +148,16 @@ final class LanguageModelRouter {
         let fullPrompt = "\(instructions)\n\n\(prompt)"
         let body: [String: Any] = ["contents": [["parts": [["text": fullPrompt]]]]]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await URLSession.shared.data(for: req)
-        let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-        return decoded.candidates.first?.content.parts.first?.text ?? ""
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                return try await routeOnDevice(prompt: prompt, instructions: instructions)
+            }
+            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+            return decoded.candidates.first?.content.parts.first?.text ?? ""
+        } catch {
+            return try await routeOnDevice(prompt: prompt, instructions: instructions)
+        }
     }
 
     // MARK: - Policy Resolution

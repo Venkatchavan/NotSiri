@@ -24,13 +24,18 @@ struct AgenticOSApp: App {
             Deadline.self,
             Meeting.self,
         ])
+        // Use local-only config (no CloudKit) to avoid iCloud container setup
+        // requirement during development/testing
         let config = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .automatic   // lightweight CloudKit metadata sync
+            isStoredInMemoryOnly: false
         )
         do {
-            return try ModelContainer(for: schema, configurations: [config])
+            let container = try ModelContainer(for: schema, configurations: [config])
+            // Register globally so background engines (ProactiveIntelligenceEngine, FileIndexer)
+            // can access the same container without needing a SwiftUI environment.
+            AgentOSModelContainer._container = container
+            return container
         } catch {
             fatalError("Could not create AgentOS ModelContainer: \(error)")
         }

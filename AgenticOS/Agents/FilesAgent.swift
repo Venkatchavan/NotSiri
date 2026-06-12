@@ -84,11 +84,23 @@ actor FilesAgent: DomainAgent {
     // MARK: - Helpers
 
     private func buildFileContext(using context: ModelContext?, query: String) async -> String {
-        guard let ctx = context,
-              let matches = try? await searchFiles(query: query, modelContext: ctx),
-              !matches.isEmpty
-        else { return "No matching files found." }
-        return matches.prefix(5).map { "\($0.displayName) – \($0.aiSummary.isEmpty ? "No summary" : $0.aiSummary)" }
-                      .joined(separator: "\n")
+        guard let ctx = context else {
+            return "File index: Not available (no model context)."
+        }
+        guard let matches = try? await searchFiles(query: query, modelContext: ctx) else {
+            return "File index: Could not search files."
+        }
+        if matches.isEmpty {
+            // Check if the index is empty altogether
+            let total = (try? ctx.fetch(FetchDescriptor<AgentFile>()))?.count ?? 0
+            if total == 0 {
+                return "File index: No files have been indexed yet. Files from Desktop, Documents and Downloads are indexed automatically on launch."
+            }
+            return "File index: No files matching \"\(query)\" found. \(total) total files indexed."
+        }
+        return "Matching files:\n" + matches.prefix(5).map {
+            "• \($0.displayName) (modified \($0.lastModified.formatted(date: .abbreviated, time: .omitted)))"
+            + ($0.aiSummary.isEmpty ? "" : " — \($0.aiSummary.prefix(80))")
+        }.joined(separator: "\n")
     }
 }

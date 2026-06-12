@@ -101,18 +101,46 @@ actor TasksAgent: DomainAgent {
     // MARK: - Helpers
 
     private func buildTaskSummary(using context: ModelContext?) async -> String {
-        guard let ctx = context else { return "No task data available." }
-        guard let tasks = try? ctx.fetch(FetchDescriptor<AgentTask>(
-            predicate: #Predicate { !$0.isCompleted }
-        )) else { return "Unable to fetch tasks." }
-        if tasks.isEmpty { return "No open tasks." }
-        let top5 = tasks
-            .sorted { $0.priority > $1.priority }
-            .prefix(5)
-        return top5.map {
-            let deadline = $0.deadline.map { " (due \($0.dueDate.formatted(date: .abbreviated, time: .omitted)))" } ?? ""
-            return "[\($0.priority.label)] \($0.title)\(deadline)"
-        }.joined(separator: "\n")
+        // Try SwiftData first (synced from Reminders on launch)
+        if let ctx = context,
+           let tasks = try? ctx.fetch(FetchDescriptor<AgentTask>(
+               predicate: #Predicate { !$0.isCompleted }
+           )),
+           !tasks.isEmpty {
+            let top5 = tasks.sorted { $0.priority > $1.priority }.prefix(5)
+            return "Open tasks:\n" + top5.map {
+                let deadline = $0.deadline.map {
+                    " (due \($0.dueDate.formatted(date: .abbreviated, time: .omitted)))"
+                } ?? ""
+                return "[\($0.priority.label)] \($0.title)\(deadline)"
+            }.joined(separator: "\n")
+        }
+
+        // Fallback: read directly from Reminders via EventKit
+        let liveReminders = await fetchLiveReminders()
+        if !liveReminders.isEmpty {
+            return "Reminders (live from Reminders app):\n"
+                + liveReminders.prefix(10).map { "• \($0)" }.joined(separator: "\n")
+        }
+
+        return "No open tasks or reminders found. If you have tasks in Reminders, tap the sync button (↻) in the toolbar."
+    }
+
+    /// Direct EventKit read – used when SwiftData sync hasn't run yet
+    private func fetchLiveReminders() async -> [String] {
+        let store = EKEventStore()
+        guard (try? await store.requestFullAccessToReminders()) == true else { return [] }
+        let predicate = store.predicateForIncompleteReminders(
+            withDueDateStarting: nil, ending: nil, calendars: nil
+        )
+        return await withCheckedContinuation { cont in
+            store.fetchReminders(matching: predicate) { reminders in
+                let titles = (reminders ?? [])
+                    .compactMap { $0.title }
+                    .filter { !$0.isEmpty }
+                cont.resume(returning: Array(titles.prefix(10)))
+            }
+        }
     }
 
     private func suggestedActions(for query: String) -> [AgentAction] {
