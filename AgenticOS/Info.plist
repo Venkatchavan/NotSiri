@@ -2,9 +2,46 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Background modes -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+		<string>processing</string>
 	</array>
+
+	<!-- Background Task identifiers for ProactiveIntelligenceEngine -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.agentos.proactive.check</string>
+	</array>
+
+	<!-- Privacy usage descriptions -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AgentOS uses the microphone for continuous ambient listening with the "Hey AgentOS" wake phrase. Speech recognition runs on-device.</string>
+
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>AgentOS uses on-device speech recognition to process your voice commands. No audio data is sent to Apple servers without your consent.</string>
+
+	<key>NSCalendarsUsageDescription</key>
+	<string>AgentOS reads your calendar to surface meeting information and schedule events on your behalf.</string>
+
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>AgentOS needs full calendar access to read events and create new meetings for you.</string>
+
+	<key>NSRemindersUsageDescription</key>
+	<string>AgentOS syncs your Reminders tasks into the unified task view.</string>
+
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>AgentOS needs full Reminders access to create and complete tasks on your behalf.</string>
+
+	<key>NSContactsUsageDescription</key>
+	<string>AgentOS reads your contacts to identify people in your email, calendar, and tasks.</string>
+
+	<!-- App-specific -->
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 AgentOS</string>
 </dict>
 </plist>

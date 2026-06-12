@@ -7,26 +7,93 @@
 
 import SwiftUI
 import SwiftData
+import UserNotifications
 
 @main
 struct AgenticOSApp: App {
+
+    // MARK: - SwiftData Hypergraph Container
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            AgentTask.self,
+            Project.self,
+            Person.self,
+            AgentEmail.self,
+            AgentFile.self,
+            AgentNote.self,
+            Deadline.self,
+            Meeting.self,
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
+        let config = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .automatic   // lightweight CloudKit metadata sync
+        )
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try ModelContainer(for: schema, configurations: [config])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            fatalError("Could not create AgentOS ModelContainer: \(error)")
         }
     }()
 
+    // MARK: - Scenes
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+
+        // Main three-column dashboard
+        Window("AgentOS Dashboard", id: "dashboard") {
+            DashboardView()
+                .modelContainer(sharedModelContainer)
+                .onAppear { requestNotificationPermission() }
         }
-        .modelContainer(sharedModelContainer)
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified(showsTitle: false))
+        .defaultSize(width: 1200, height: 780)
+        .commands {
+            AgentOSCommands()
+        }
+
+        // Always-visible menu bar extra
+        MenuBarExtra("AgentOS", systemImage: "cpu.fill") {
+            MenuBarAgentView()
+                .modelContainer(sharedModelContainer)
+        }
+        .menuBarExtraStyle(.window)
+
+        // Settings window
+        Settings {
+            SettingsView()
+                .modelContainer(sharedModelContainer)
+        }
+    }
+
+    // MARK: - Notification Permission
+
+    private func requestNotificationPermission() {
+        Task {
+            _ = try? await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound, .badge])
+            ProactiveIntelligenceEngine.shared.scheduleNextBackgroundCheck()
+        }
+    }
+}
+
+// MARK: - Menu Commands
+
+struct AgentOSCommands: Commands {
+    var body: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("Morning Briefing") {
+                Task {
+                    _ = try? await CoordinatorAgent.shared.morningDigest(modelContext: nil)
+                }
+            }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
+
+            Button("Start Listening") {
+                Task { await VoiceCommandRouter.shared.activate() }
+            }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
+        }
     }
 }
