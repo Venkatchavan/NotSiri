@@ -15,27 +15,44 @@ actor MailAgent: DomainAgent {
 
     var systemInstructions: String {
         """
-        You are the Mail Agent for AgentOS. You help the user manage their email.
-        CRITICAL PRIVACY RULE: Email body content is NEVER sent to any cloud service.
-        You only receive subject lines and sender names for analysis.
+        You are the Mail Agent for AgentOS.
+        CRITICAL RULE: ONLY reference emails that are explicitly listed in the context below.
+        NEVER invent, fabricate, or assume the existence of emails, senders, or subjects.
+        If no emails are listed, say so clearly — do NOT make up placeholder examples.
+        PRIVACY RULE: Email body content is never sent to cloud services. Only subjects and senders are used.
         Draft emails professionally but concisely.
-        Identify threads needing reply that are older than 48 hours.
-        Summarise email intent from subject lines alone when body is not available.
         """
     }
 
     // MARK: - DomainAgent
 
     func process(query: String, context: AgentContext) async throws -> AgentResponse {
-        // Mail always routes on-device (privacy boundary enforced)
         let emailContext = buildEmailContext(from: context.modelContext)
+
+        // ── Guard: no email data → skip LLM, return factual answer ───────────
+        if emailContext.hasPrefix("Inbox data: Not available") {
+            return AgentResponse(
+                domain: .mail,
+                content: "No email data is available in AgentOS yet.\n\n" +
+                         "AgentOS can **compose** emails via your default mail client. " +
+                         "Use the **Mail** panel in the Active Focus column to compose.\n\n" +
+                         "Note: macOS privacy restrictions prevent apps from reading Mail.app's inbox directly.",
+                confidence: 1.0,
+                suggestedActions: [
+                    AgentAction(label: "Compose Email", systemImage: "square.and.pencil", intent: "DraftEmailIntent")
+                ],
+                provider: .onDevice
+            )
+        }
+
+        // ── Real emails found → use on-device LLM ────────────────────────────
         let session = LanguageModelSession(instructions: systemInstructions)
         let enrichedPrompt = """
         Current date: \(context.currentDate.formatted())
         \(emailContext)
+
+        IMPORTANT: Only reference the emails listed above. Do NOT invent emails.
         User query: \(query)
-        IMPORTANT: Only reference emails listed above. Do NOT invent email subjects, senders, or counts.
-        If no email data is shown, tell the user that inbox access requires importing emails first.
         """
         let response = try await session.respond(to: enrichedPrompt)
         return AgentResponse(
@@ -43,7 +60,7 @@ actor MailAgent: DomainAgent {
             content: response.content,
             confidence: 0.88,
             suggestedActions: suggestedActions(for: query),
-            provider: .onDevice   // enforced
+            provider: .onDevice
         )
     }
 

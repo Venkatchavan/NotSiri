@@ -14,24 +14,41 @@ actor FilesAgent: DomainAgent {
 
     var systemInstructions: String {
         """
-        You are the Files Agent for AgentOS. You help the user find and understand files.
-        CRITICAL PRIVACY RULE: File content is NEVER sent anywhere – only filenames, tags, and AI-generated on-device summaries.
+        You are the Files Agent for AgentOS.
+        CRITICAL RULE: ONLY reference files that are explicitly listed in the context below.
+        NEVER invent, fabricate, or assume the existence of files, filenames, or paths.
+        If no files are listed, say so — do NOT suggest example files.
+        PRIVACY RULE: File content is never transmitted — only filenames, tags, and local summaries.
         Help the user locate files by semantic description, date range, or tag.
-        When summarising a file, do so in under 3 sentences from its local content.
-        Suggest organising related files into projects.
         """
     }
 
     // MARK: - DomainAgent
 
     func process(query: String, context: AgentContext) async throws -> AgentResponse {
-        let fileContext = await buildFileContext(using: context.modelContext, query: query)
+        let (fileContext, hasData) = await buildFileData(using: context.modelContext, query: query)
+
+        // ── Guard: no file index → skip LLM ──────────────────────────────────
+        guard hasData else {
+            return AgentResponse(
+                domain: .files,
+                content: fileContext,
+                confidence: 1.0,
+                suggestedActions: [
+                    AgentAction(label: "Find Files", systemImage: "magnifyingglass", intent: "FindFilesIntent")
+                ],
+                provider: .onDevice
+            )
+        }
+
+        // ── Real files found → use on-device LLM ─────────────────────────────
+        let session = LanguageModelSession(instructions: systemInstructions)
         let enrichedPrompt = """
         Query: \(query)
-        Relevant files found: \(fileContext)
+        \(fileContext)
+
+        IMPORTANT: Only reference files listed above. Do NOT invent files.
         """
-        // Files always on-device (privacy boundary)
-        let session = LanguageModelSession(instructions: systemInstructions)
         let response = try await session.respond(to: enrichedPrompt)
         return AgentResponse(
             domain: .files,
@@ -83,24 +100,34 @@ actor FilesAgent: DomainAgent {
 
     // MARK: - Helpers
 
-    private func buildFileContext(using context: ModelContext?, query: String) async -> String {
+    /// Returns (context string, hasRealData).
+    private func buildFileData(using context: ModelContext?, query: String) async -> (String, Bool) {
         guard let ctx = context else {
-            return "File index: Not available (no model context)."
+            return ("File index is not available (no model context).", false)
+        }
+        let total = (try? ctx.fetch(FetchDescriptor<AgentFile>()))?.count ?? 0
+        if total == 0 {
+            return (
+                "No files have been indexed yet.\n\n" +
+                "Files from your Desktop, Documents and Downloads folders are indexed automatically on launch. " +
+                "Tap ↻ in the toolbar to trigger indexing.",
+                false
+            )
         }
         guard let matches = try? await searchFiles(query: query, modelContext: ctx) else {
-            return "File index: Could not search files."
+            return ("Could not search the file index (\(total) files total).", false)
         }
         if matches.isEmpty {
-            // Check if the index is empty altogether
-            let total = (try? ctx.fetch(FetchDescriptor<AgentFile>()))?.count ?? 0
-            if total == 0 {
-                return "File index: No files have been indexed yet. Files from Desktop, Documents and Downloads are indexed automatically on launch."
-            }
-            return "File index: No files matching \"\(query)\" found. \(total) total files indexed."
+            return (
+                "No files matching \"\(query)\" found in \(total) indexed files.\n" +
+                "Try a broader search term or check the Files panel.",
+                false
+            )
         }
-        return "Matching files:\n" + matches.prefix(5).map {
-            "• \($0.displayName) (modified \($0.lastModified.formatted(date: .abbreviated, time: .omitted)))"
-            + ($0.aiSummary.isEmpty ? "" : " — \($0.aiSummary.prefix(80))")
+        let lines = matches.prefix(8).map { f in
+            "• \(f.displayName) (modified \(f.lastModified.formatted(date: .abbreviated, time: .omitted)))"
+            + (f.aiSummary.isEmpty ? "" : "\n  \(f.aiSummary.prefix(100))")
         }.joined(separator: "\n")
+        return ("Matching files (\(matches.count) found out of \(total) total):\n\(lines)", true)
     }
 }

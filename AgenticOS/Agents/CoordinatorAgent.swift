@@ -126,7 +126,7 @@ final class CoordinatorAgent {
     ) async throws -> CoordinatorResponse {
         if responses.isEmpty {
             return CoordinatorResponse(
-                summary: "I couldn't find relevant information for that query.",
+                summary: "No information found for that query. Try tapping ↻ to sync your device data first.",
                 domainResponses: [],
                 intent: classification.intent,
                 confidence: 0.1
@@ -140,20 +140,22 @@ final class CoordinatorAgent {
                 confidence: responses[0].confidence
             )
         }
-        // Multi-domain merge via synthesis
-        let responsesText = responses.map { "[\($0.domain.rawValue)] \($0.content)" }.joined(separator: "\n\n")
+        // Multi-domain merge via on-device LLM
+        let responsesText = responses.map { "[\($0.domain.rawValue)]\n\($0.content)" }.joined(separator: "\n\n---\n\n")
         let mergeInstructions = """
-        You are the coordinator for AgentOS. Multiple domain agents have responded to a query.
-        Merge their responses into a single, coherent, non-redundant answer.
-        Lead with the most important information. Credit each domain inline when relevant.
+        You are the coordinator for AgentOS. Multiple domain agents have responded.
+        CRITICAL RULE: Only include information that appears in the domain responses below.
+        NEVER invent, add, or embellish information that is not explicitly stated in those responses.
+        If a domain says "no data available", reflect that honestly.
+        Merge responses into a single clear, non-redundant answer.
         """
         let mergePrompt = """
         Original query: \(originalQuery)
 
-        Domain agent responses:
+        Domain responses:
         \(responsesText)
 
-        Produce a unified response:
+        Produce a unified response using ONLY the information above:
         """
         let merged = try await router.routeOnDevice(prompt: mergePrompt, instructions: mergeInstructions)
         let avgConfidence = responses.map(\.confidence).reduce(0, +) / Double(responses.count)

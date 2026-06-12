@@ -15,11 +15,11 @@ actor CalendarAgent: DomainAgent {
     var systemInstructions: String {
         """
         You are the Calendar Agent for AgentOS, a personal AI chief of staff.
-        Your role is to manage, query, and schedule calendar events.
-        You have access to the user's EventKit calendar data.
-        Always speak in first-person on behalf of the user.
+        CRITICAL RULE: ONLY reference events that are explicitly listed in the context below.
+        NEVER invent, assume, or fabricate calendar events, meetings, or appointments.
+        If no events are listed, say the calendar is clear for that period.
         Format times naturally (e.g. "3 PM tomorrow" not "15:00:00").
-        Proactively notice conflicts and suggest resolutions.
+        Proactively notice conflicts only if multiple events overlap in the provided list.
         """
     }
 
@@ -30,12 +30,44 @@ actor CalendarAgent: DomainAgent {
 
     func process(query: String, context: AgentContext) async throws -> AgentResponse {
         await requestAccessIfNeeded()
-        let calendarContext = await buildCalendarContext(for: context.currentDate)
+
+        // ── Guard: no permission ──────────────────────────────────────────────
+        guard isAuthorized else {
+            return AgentResponse(
+                domain: .calendar,
+                content: "Calendar access has not been granted.\n\nTo fix: open **System Settings → Privacy & Security → Calendar** and enable AgentOS, then tap ↻ to re-sync.",
+                confidence: 1.0,
+                suggestedActions: [],
+                provider: .onDevice
+            )
+        }
+
+        // Fetch real events
+        let todayEvents    = await todaysMeetings()
+        let upcomingEvents = await upcomingMeetings(days: 3)
+        let futureEvents   = upcomingEvents.filter { !Calendar.current.isDateInToday($0.startDate) }
+
+        // ── Guard: calendar is genuinely clear ───────────────────────────────
+        if todayEvents.isEmpty && futureEvents.isEmpty {
+            let dateStr = context.currentDate.formatted(date: .complete, time: .omitted)
+            return AgentResponse(
+                domain: .calendar,
+                content: "Your calendar is clear — no events found for today (\(dateStr)) or the next 2 days.",
+                confidence: 1.0,
+                suggestedActions: [
+                    AgentAction(label: "Schedule Meeting", systemImage: "calendar.badge.plus", intent: "ScheduleMeetingIntent")
+                ],
+                provider: .onDevice
+            )
+        }
+
+        // ── Real events exist → let LLM reason about them ────────────────────
+        let calendarContext = buildCalendarString(today: todayEvents, upcoming: futureEvents)
         let enrichedPrompt = """
         Current date/time: \(context.currentDate.formatted())
-        Today's calendar: \(calendarContext)
-        Recent context entities: \(context.recentEntities.joined(separator: ", "))
+        \(calendarContext)
 
+        IMPORTANT: Only reference the events listed above. Do NOT invent events.
         User query: \(query)
         """
         let response = try await router.route(
@@ -44,12 +76,11 @@ actor CalendarAgent: DomainAgent {
             complexity: .factual,
             instructions: systemInstructions
         )
-        let actions = suggestedActions(for: query)
         return AgentResponse(
             domain: .calendar,
             content: response.content,
             confidence: 0.92,
-            suggestedActions: actions,
+            suggestedActions: suggestedActions(for: query),
             provider: response.provider
         )
     }
@@ -85,44 +116,33 @@ actor CalendarAgent: DomainAgent {
     func scheduleEvent(title: String, start: Date, duration: TimeInterval, participants: [String] = []) async throws {
         await requestAccessIfNeeded()
         guard isAuthorized else { throw CalendarError.notAuthorized }
-        let event           = EKEvent(eventStore: eventStore)
-        event.title         = title
-        event.startDate     = start
-        event.endDate       = start.addingTimeInterval(duration)
-        event.calendar      = eventStore.defaultCalendarForNewEvents
-        for email in participants {
-            let attendee = eventStore.value(forKey: "_createAttendeeWithEmailAddress:\(email)") as? EKParticipant
-            _ = attendee // EKEvent attendees are read-only; invites go via MailAgent
-        }
+        let event       = EKEvent(eventStore: eventStore)
+        event.title     = title
+        event.startDate = start
+        event.endDate   = start.addingTimeInterval(duration)
+        event.calendar  = eventStore.defaultCalendarForNewEvents
         try eventStore.save(event, span: .thisEvent)
     }
 
     // MARK: - Helpers
 
-    private func buildCalendarContext(for date: Date) async -> String {
-        let todayEvents    = await todaysMeetings()
-        let upcomingEvents = await upcomingMeetings(days: 3)
-        let tomorrow       = upcomingEvents.filter { !Calendar.current.isDateInToday($0.startDate) }
-
+    private func buildCalendarString(today: [EKEvent], upcoming: [EKEvent]) -> String {
         var parts: [String] = []
-
-        if todayEvents.isEmpty {
+        if today.isEmpty {
             parts.append("Today: No events scheduled.")
         } else {
-            let todayStr = todayEvents.map {
+            let s = today.map {
                 "\($0.title ?? "Untitled") at \($0.startDate.formatted(date: .omitted, time: .shortened))"
                 + ($0.location.map { " @ \($0)" } ?? "")
             }.joined(separator: "; ")
-            parts.append("Today: \(todayStr)")
+            parts.append("Today (\(today.count) event\(today.count == 1 ? "" : "s")): \(s)")
         }
-
-        if !tomorrow.isEmpty {
-            let upcomingStr = tomorrow.prefix(5).map {
+        if !upcoming.isEmpty {
+            let s = upcoming.prefix(5).map {
                 "\($0.title ?? "Untitled") on \($0.startDate.formatted(date: .abbreviated, time: .shortened))"
             }.joined(separator: "; ")
-            parts.append("Upcoming (next 2 days): \(upcomingStr)")
+            parts.append("Upcoming (next 2 days): \(s)")
         }
-
         return parts.joined(separator: "\n")
     }
 

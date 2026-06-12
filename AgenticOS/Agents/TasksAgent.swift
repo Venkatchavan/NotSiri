@@ -16,11 +16,11 @@ actor TasksAgent: DomainAgent {
     var systemInstructions: String {
         """
         You are the Tasks Agent for AgentOS. You manage the user's task list.
-        Prioritise tasks intelligently based on deadlines, dependencies, and importance.
-        When a task has a deadline approaching, flag it clearly.
-        Suggest logical grouping by project.
-        When the user asks what to work on next, return the single most impactful task.
-        Format task lists as bullet points with priority indicators.
+        CRITICAL RULE: ONLY reference tasks that are explicitly listed in the context below.
+        NEVER invent, assume, or suggest tasks that are not in the provided list.
+        If no tasks are listed, say so clearly and offer to help add new ones.
+        Prioritise tasks by deadline then by priority level.
+        Format task lists as bullet points with priority indicators (🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low).
         """
     }
 
@@ -29,10 +29,29 @@ actor TasksAgent: DomainAgent {
     // MARK: - DomainAgent
 
     func process(query: String, context: AgentContext) async throws -> AgentResponse {
-        let taskSummary = await buildTaskSummary(using: context.modelContext)
+        let (summary, hasData) = await buildTaskData(using: context.modelContext)
+
+        // ── Guard: no real tasks → return factual answer, skip LLM ──────────
+        // This is the only reliable way to prevent hallucination of fake tasks.
+        guard hasData else {
+            return AgentResponse(
+                domain: .tasks,
+                content: summary,
+                confidence: 1.0,
+                suggestedActions: [
+                    AgentAction(label: "Add Task", systemImage: "plus.circle.fill", intent: "AddTaskIntent"),
+                    AgentAction(label: "Open Reminders", systemImage: "checklist", intent: "QueryIntent")
+                ],
+                provider: .onDevice
+            )
+        }
+
+        // ── Real tasks found → let the LLM reason about them ─────────────────
         let enrichedPrompt = """
         Current date: \(context.currentDate.formatted())
-        Open tasks: \(taskSummary)
+        \(summary)
+
+        IMPORTANT: Only reference the tasks listed above. Do NOT invent tasks.
         User query: \(query)
         """
         let response = try await router.route(
@@ -100,33 +119,40 @@ actor TasksAgent: DomainAgent {
 
     // MARK: - Helpers
 
-    private func buildTaskSummary(using context: ModelContext?) async -> String {
-        // Try SwiftData first (synced from Reminders on launch)
+    /// Returns (summary string, hasRealData flag).
+    /// hasRealData = false → caller must NOT route to LLM.
+    private func buildTaskData(using context: ModelContext?) async -> (String, Bool) {
+        // 1. SwiftData (synced from Reminders on launch)
         if let ctx = context,
            let tasks = try? ctx.fetch(FetchDescriptor<AgentTask>(
                predicate: #Predicate { !$0.isCompleted }
            )),
            !tasks.isEmpty {
-            let top5 = tasks.sorted { $0.priority > $1.priority }.prefix(5)
-            return "Open tasks:\n" + top5.map {
-                let deadline = $0.deadline.map {
-                    " (due \($0.dueDate.formatted(date: .abbreviated, time: .omitted)))"
-                } ?? ""
-                return "[\($0.priority.label)] \($0.title)\(deadline)"
+            let top10 = tasks.sorted { $0.priority > $1.priority }.prefix(10)
+            let lines = top10.map { t -> String in
+                let dl = t.deadline.map { " — due \($0.dueDate.formatted(date: .abbreviated, time: .omitted))" } ?? ""
+                return "• [\(t.priority.label)] \(t.title)\(dl)"
             }.joined(separator: "\n")
+            return ("Your open tasks (\(tasks.count) total):\n\(lines)", true)
         }
 
-        // Fallback: read directly from Reminders via EventKit
+        // 2. Live Reminders fallback (for first launch before sync)
         let liveReminders = await fetchLiveReminders()
         if !liveReminders.isEmpty {
-            return "Reminders (live from Reminders app):\n"
-                + liveReminders.prefix(10).map { "• \($0)" }.joined(separator: "\n")
+            let lines = liveReminders.map { "• \($0)" }.joined(separator: "\n")
+            return ("Your reminders (from Reminders app):\n\(lines)", true)
         }
 
-        return "No open tasks or reminders found. If you have tasks in Reminders, tap the sync button (↻) in the toolbar."
+        // 3. Truly empty — return factual no-data message
+        return (
+            "You have no open tasks or reminders in AgentOS right now.\n\n" +
+            "• If you have tasks in Reminders, tap ↻ in the toolbar to re-sync.\n" +
+            "• Tap **Add Task** below to create your first task.",
+            false
+        )
     }
 
-    /// Direct EventKit read – used when SwiftData sync hasn't run yet
+    /// Direct EventKit read – used when SwiftData hasn't synced yet
     private func fetchLiveReminders() async -> [String] {
         let store = EKEventStore()
         guard (try? await store.requestFullAccessToReminders()) == true else { return [] }

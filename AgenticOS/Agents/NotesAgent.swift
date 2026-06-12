@@ -14,25 +14,35 @@ actor NotesAgent: DomainAgent {
 
     var systemInstructions: String {
         """
-        You are the Notes Agent for AgentOS. You help the user capture, retrieve, and connect notes.
-        You have access to notes from local storage, Obsidian, and Notion vaults.
-        Find connections between notes and surface related information when relevant.
-        When creating notes, use clear structure with headers.
+        You are the Notes Agent for AgentOS.
+        CRITICAL RULE: ONLY reference notes that are explicitly listed in the context below.
+        NEVER invent, fabricate, or assume the existence of notes, their content, or their titles.
+        If no notes are listed, say so clearly — do NOT generate example notes.
+        Find connections between notes only when multiple notes are actually provided.
         Always attribute the source (Local / Obsidian / Notion) when referencing a note.
-        Identify notes that relate to the user's current projects and deadlines.
         """
     }
 
     // MARK: - DomainAgent
 
     func process(query: String, context: AgentContext) async throws -> AgentResponse {
-        let notesContext = await buildNotesContext(using: context.modelContext, query: query)
-        let enrichedPrompt = """
-        Current date: \(context.currentDate.formatted())
-        Relevant notes: \(notesContext)
-        Recent entities: \(context.recentEntities.joined(separator: ", "))
-        Query: \(query)
-        """
+        let (notesContext, hasData) = await buildNotesData(using: context.modelContext, query: query)
+
+        // ── Guard: no notes → return factual answer, skip LLM ───────────────
+        guard hasData else {
+            return AgentResponse(
+                domain: .notes,
+                content: notesContext,
+                confidence: 1.0,
+                suggestedActions: [
+                    AgentAction(label: "New Note", systemImage: "note.text.badge.plus", intent: "QueryIntent")
+                ],
+                provider: .onDevice
+            )
+        }
+
+        // ── Real notes found → use LLM ────────────────────────────────────────
+        let enrichedPrompt = "Current date: \(context.currentDate.formatted())\n\(notesContext)\n\nIMPORTANT: Only reference notes listed above. Do NOT invent notes.\nQuery: \(query)"
         let response = try await router.route(
             prompt: enrichedPrompt,
             domain: .notes,
@@ -44,8 +54,8 @@ actor NotesAgent: DomainAgent {
             content: response.content,
             confidence: 0.87,
             suggestedActions: [
-                AgentAction(label: "New Note", systemImage: "note.text.badge.plus", intent: "QueryIntent"),
-                AgentAction(label: "Search Notes", systemImage: "magnifyingglass", intent: "QueryIntent")
+                AgentAction(label: "New Note",     systemImage: "note.text.badge.plus", intent: "QueryIntent"),
+                AgentAction(label: "Search Notes", systemImage: "magnifyingglass",      intent: "QueryIntent")
             ],
             provider: response.provider
         )
@@ -66,8 +76,7 @@ actor NotesAgent: DomainAgent {
     }
 
     func searchNotes(query: String, modelContext: ModelContext) async throws -> [AgentNote] {
-        let descriptor = FetchDescriptor<AgentNote>()
-        let all = try modelContext.fetch(descriptor)
+        let all = try modelContext.fetch(FetchDescriptor<AgentNote>())
         return all.filter {
             $0.title.localizedCaseInsensitiveContains(query) ||
             $0.content.localizedCaseInsensitiveContains(query) ||
@@ -75,16 +84,42 @@ actor NotesAgent: DomainAgent {
         }
     }
 
-    /// Synthesise a summary across multiple notes using Claude
     func synthesiseNotes(_ notes: [AgentNote]) async throws -> String {
         guard !notes.isEmpty else { return "No notes to summarise." }
-        let notesText = notes.prefix(10).map { "[\($0.source.rawValue)] **\($0.title)**\n\($0.content)" }.joined(separator: "\n\n")
+        let notesText = notes.prefix(10)
+            .map { "[\($0.source.rawValue)] **\($0.title)**\n\($0.content)" }
+            .joined(separator: "\n\n")
         let session = LanguageModelSession(instructions: systemInstructions)
-        let response = try await session.respond(to: "Synthesise the key themes and actionable insights from these notes:\n\n\(notesText)")
+        let response = try await session.respond(to: "Summarise key themes from these notes:\n\n\(notesText)")
         return response.content
     }
 
     // MARK: - Helpers
+
+    /// Returns (context string, hasRealData). hasRealData = false → skip LLM entirely.
+    private func buildNotesData(using modelContext: ModelContext?, query: String) async -> (String, Bool) {
+        guard let ctx = modelContext else {
+            return ("Notes are not available (no model context).", false)
+        }
+        guard let matches = try? await searchNotes(query: query, modelContext: ctx),
+              !matches.isEmpty
+        else {
+            let total = (try? ctx.fetch(FetchDescriptor<AgentNote>()))?.count ?? 0
+            if total == 0 {
+                return (
+                    "You have no notes in AgentOS yet.\n\n" +
+                    "• Connect Obsidian or Notion via the Privacy & Routing panel (🔒 in toolbar).\n" +
+                    "• Or create a note directly from the Notes panel.",
+                    false
+                )
+            }
+            return ("No notes matching \"\(query)\" found (\(total) total notes exist).", false)
+        }
+        let lines = matches.prefix(5).map { n in
+            "[\(n.source.rawValue)] \(n.title): \(n.content.prefix(120))…"
+        }.joined(separator: "\n\n")
+        return ("Relevant notes (\(matches.count) found):\n\n\(lines)", true)
+    }
 
     private func buildNotesContext(using context: ModelContext?, query: String) async -> String {
         guard let ctx = context,
